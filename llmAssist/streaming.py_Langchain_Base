@@ -1,0 +1,222 @@
+import asyncio
+from fastapi import WebSocketDisconnect
+from llmAssist.streaming_callback import StreamingCallback
+from langchain_core.prompts import PromptTemplate, ChatPromptTemplate
+
+from langchain.chains import RetrievalQA
+from model.model_setup import getLlm, getAgentLlm, getAgentAnswerLlm
+
+from langchain.agents import AgentExecutor, create_tool_calling_agent
+
+# agent Module
+# from crewai import Agent, Task, Crew 
+# search
+# from langchain_community.tools import DuckDuckGoSearchRun
+
+# from langsmith.wrappers import wrap_openai
+# from langsmith import traceable
+
+# from langchain.callbacks.manager import CallbackManager #콜백
+# , callback_manager=CallbackManager([streaming_callback])
+
+CHAT_PROMPT_TEMPLATE = """당신은 친절한 분석 AI 입니다. 질문에 답하세요. 답을 모른다면 모른다고 답변하세요.  <Question>: {input}"""
+# RAG_PROMPT_TEMPLATE = """당신은 친절한 분석 AI 입니다. 검색된 다음 문맥을 사용하여 질문에 답하세요. 답변을 간결하게 답하세요. 답을 모른다면 모른다고 답변하세요.
+# RAG_PROMPT_TEMPLATE = """당신은 친절한 요약 AI 입니다. 문맥을 요약해주세요. 입력된 문맥들을 간단하게 요약하여 답하시오.
+# Question: {question} 
+# Context: {context} 
+# Answer:"""
+RAG_PROMPT_TEMPLATE = """당신은 요약 AI이다. 반복 되는 글자를 기준으로 분류 하여 요약. 입력된 문맥들을 짧고 간단하게 요약하여 답해. 단순 텍스트 형식으로 정보를 제공해. 요약 시 개인정보(이름, 서명, 주소, 전화번호 등)는 포함하면 안돼.
+Question: {question} 
+Context: {context} 
+Answer:"""
+
+AGENT_MAIN_RAG_PROMPT_TEMPLATE = """당신은 요약 AI 입니다. 조수가 정리 한 내용을 토대로 자료를 분류하여 답변하세요. 입력된 문맥들을 짧고 간단하게 요약하여 답해. 단순 텍스트 형식으로 정보를 제공해.
+Question: {question} 
+Context: {context} 
+Answer:"""
+
+AGENT_ASSISTANTE_RAG_PROMPT_TEMPLATE = """당신은 조수 AI이다. 입력된 문맥들의 핵심주제를 정리해라. 제공된 일련의 정보를 바탕으로 대분류를 분류해라. 요약 시 개인정보(이름, 서명, 주소, 전화번호 등)는 포함하면 안돼.
+Question: {question} 
+Context: {context} 
+Answer:"""
+
+
+
+#최신 데이터 서칭 결과 포함 관련 함수
+# def ddgsearch(question: str) -> str:
+#     """Clear description for what this tool is useful for, your agent will need this information to use it."""
+#     # Function logic here
+#     return DuckDuckGoSearchRun().run(question)
+
+async def StreamFileResponse(websocket, user_input, retriever, task_id):
+    streaming_callback = StreamingCallback(task_id,websocket)        
+    llm = getLlm(streaming_callback)
+
+    # prompt 생성
+    QA_CHAIN_PROMPT = PromptTemplate(
+        input_variables=["context", "question"],
+        template=RAG_PROMPT_TEMPLATE,
+    )
+
+    agent = create_tool_calling_agent(llm,  QA_CHAIN_PROMPT)
+    agent_executor = AgentExecutor(
+        agent=agent
+        , verbose=True
+        , retriever=retriever
+        , return_intermediate_steps = True
+    )
+    ###########################################
+    # client = wrap_openai(llm)
+    # @traceable # langSmith 데이터 추가
+    # def pipeline(user_input: str):
+    #     result = client.chat.completions.create(
+    #         messages=[{"role": "user", "content": user_input}],
+    #         model="gpt-3.5-turbo"
+    #     )
+    #     return result.choices[0].message.content
+
+
+
+
+
+
+
+    ##########################################
+    #agent 구성 (요약 주체역할)
+    # researcher = Agent(
+    #     role='Researcher',
+    #     goal='내용을 요약 해야한다. {user_input}', #tool 사용시 추가
+    #     backstory="""
+    #     당신은 요약 AI 입니다. 조수가 정리 한 내용을 토대로 자료를 분류하여 답변하세요. 입력된 문맥들을 짧고 간단하게 요약하여 답해.
+    #     """,
+    #     verbose=True,            # want to see the thinking behind
+    #     allow_delegation=False,  # Not allowed to ask any of the other roles
+    #     # retriever=retriever,
+    #     # tools=[DuckDuckGoSearchRun()], # 최신 데이터 서칭 결과 포함
+    #     tools=[], # 최신 데이터 서칭 결과 포함
+    #     llm=getAgentAnswerLlm()           # local model
+    # )
+
+    # task1 = Task(
+    #     agent=researcher,
+    #     description=user_input,
+    #     expected_output="제목으로 제시 된 {research_topic}에 대한 요약 내용 정리. 단순 텍스트 형식으로 정보를 제공해. 요약 시 개인정보(이름, 서명, 주소, 전화번호 등)는 포함하면 안돼.",
+    # )
+    # # agent 구성 (조수 역)
+    # writer = Agent(
+    #     role='assistant',#에이전트의 기능을 정의합니다. 에이전트가 가장 적합한 작업 유형을 결정합니다.
+    #     goal='제공된 일련의 정보를 바탕으로 대분류를 분류해라.',#	에이전트가 달성하고자 하는 개별 목표. 에이전트의 의사 결정 과정을 안내합니다
+    #     backstory="""당신은 조수 AI이다. 입력된 문맥들의 핵심주제를 정리해라. """,#	에이전트의 역할과 목표에 대한 맥락을 제공하여 상호작용 및 협업 역학을 풍부하게 합니다.
+    #     verbose=True,            # want to see the thinking behind
+    #     allow_delegation=True,   # Can ask the "researcher" for more information
+    #     retriever=retriever,
+    #     tools=[], # 최신 데이터 서칭 결과 포함
+    #     llm=getAgentLlm()  # Using the local model
+    # )
+
+    # task2 = Task(
+    #     agent=writer,
+    #     description="""단순 텍스트 형식으로 정보를 제공해. 요약 시 개인정보(이름, 서명, 주소, 전화번호 등)는 포함하면 안돼.""",
+    #     expected_output="""간단하고 명료하게 설명해야하며 대제목을 통한 분류를 하며 설명하여야한다.""",
+    # )
+
+    # crew = Crew(
+    #     agents=[researcher, writer],
+    #     tasks=[task1, task2],
+    #     verbose=2, # You can set it to 1 or 2 for different logging levels
+    #     # task_callback=streaming_callback
+    #     # manager_callbacks=streaming_callback,
+    # )
+    # print('.')
+    # result1 = crew.kickoff()
+    # print(result1)
+    # result1 = crew.kickoff_async()
+    # print(result1)
+    # result1 = crew.kickoff_for_each_async()
+    # print(result1)
+    # result1 = crew.kickoff_for_each()
+    # print(result1)
+
+    #응답 및 stream task 실행
+    # async def stream_process_start():
+    #     async for token in await crew.kickoff_for_each():
+    #         await websocket.send_text(token)
+
+    # async def stream_response():
+    #     task = asyncio.create_task(stream_process_start())
+    #     try:
+    #         await task 
+    #     except WebSocketDisconnect:
+    #         task.cancel()
+
+    # await stream_response()
+
+    # async def stream_process_start():
+    #     async for _ in await crew.kickoff_async():
+    #         pass
+
+    # async def stream_response(task):
+    #             try:
+    #                 async for token in streaming_callback.token_generator():
+    #                     await websocket.send_text(token)
+    #             except WebSocketDisconnect:
+    #                 #답변 정지 시 task 정지
+    #                 task.cancel()
+    # task = asyncio.create_task(stream_process_start())
+
+    # await stream_response(task)
+
+    ###########################################
+
+    #chain 생성
+    # qa_chain = RetrievalQA.from_chain_type(
+    #     llm,
+    #     retriever=retriever,
+    #     chain_type_kwargs={"prompt": QA_CHAIN_PROMPT},
+    # )
+
+    
+    # print('send 중...')
+
+    # #응답 및 stream task 실행
+    # async def stream_process_start():
+    #     async for _ in qa_chain.astream(user_input):
+    #         pass
+
+    # async def stream_response(task):
+    #             try:
+    #                 async for token in streaming_callback.token_generator():
+    #                     await websocket.send_text(token)
+    #             except WebSocketDisconnect:
+    #                 #답변 정지 시 task 정지
+    #                 task.cancel()
+    # task = asyncio.create_task(stream_process_start())
+
+    # await stream_response(task)
+
+
+async def StreamResponse(websocket, user_input, task_id):
+    streaming_callback = StreamingCallback(task_id,websocket)        
+    QA_CHAIN_PROMPT = ChatPromptTemplate.from_template(CHAT_PROMPT_TEMPLATE)
+    
+    llm = getLlm(streaming_callback)
+    #ollama 모델 chain 생성
+    qa_chain = QA_CHAIN_PROMPT | llm
+    print('send 중...')
+
+    #응답 및 stream task 실행
+    async def stream_process_start():
+        async for token in qa_chain.astream(user_input):
+            await websocket.send_text(token)
+
+    async def stream_response():
+        task = asyncio.create_task(stream_process_start())
+        try:
+            await task 
+        except WebSocketDisconnect:
+            task.cancel()
+
+    await stream_response()
+
+
+
